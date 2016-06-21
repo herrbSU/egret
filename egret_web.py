@@ -34,6 +34,8 @@ data['baseSubstr'] = ''
 data['testString'] = ''
 data['showGroups'] = False
 data['useDiffBase'] = False
+UPLOAD_FOLDER = '/tmp' # Uploads module requires this to be set, but nothing is actually saved there
+ALLOWED_EXTENSIONS = set(['txt'])
 
 # configuration
 DEBUG = True
@@ -41,11 +43,16 @@ DEBUG = True
 # create our application
 app = Flask(__name__)
 app.config.from_object(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-@app.route('/', methods=['GET', 'POST'])
-def process_submit():
+# Helper Functions
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1] in ALLOWED_EXTENSIONS
+
+def run_egret():
     global session
-    
+
     # get data from text boxes
     if 'regex' in request.form:
         data['regex'] = request.form.get('regex')
@@ -62,7 +69,7 @@ def process_submit():
     # process saved string options
     addedStrs = []
     if 'addTestString' in request.form:
-      addedStrs = [ testString ]
+      addedStrs = [ data['testString'] ]
     elif 'addSelectedAccept' in request.form:
       addedStrs = request.form.getlist('accept')
     elif 'addAccept' in request.form:
@@ -82,27 +89,21 @@ def process_submit():
       if item not in session:
         session.append(item)
 
-    # uploads strings to session
-    #upload = request.form.get('upload') 
-    #if upload:
-    #    uploadedStrings = upload.splitlines()
-    #    for item in uploadedStrings:
-    #        session.append(item)
-
-    # empty regex --> return empty results
-    if data['regex'] == '':
-      return render_template('egret.html', data=data, session=session)
-    
     # run egret engine
     if data['useDiffBase']:
       baseSubstr = data['baseSubstr']
     else:
       baseSubstr = 'evil'
-    (data['passList'], data['failList'], data['errorMsg'], data['warnings']) = \
+      
+    if data['regex'] != '':
+      (data['passList'], data['failList'], data['errorMsg'], data['warnings']) = \
         egret_api.run_egret(data['regex'], baseSubstr, session)
+    else:
+      (data['passList'], data['failList'], data['errorMsg'], data['warnings']) = \
+        ([], [], None, None)
     
     # get group information
-    if data['showGroups'] and data['errorMsg'] == None:
+    if data['regex'] != '' and data['showGroups'] and data['errorMsg'] == None:
         (data['groupHdr'], data['groupRows'], data['numGroups']) = \
             egret_api.get_group_info(data['regex'], data['passList'])
     else:
@@ -111,10 +112,18 @@ def process_submit():
     
     
     # determine if test string is accepted or not
-    if data['testString'] != '' and data['errorMsg'] == None:
+    if data['regex'] != '' and data['testString'] != '' and data['errorMsg'] == None:
         data['testResult'] = egret_api.run_test_string(data['regex'], data['testString'])
     else:
         data['testResult'] = ''
+
+# Routes
+
+@app.route('/', methods=['GET', 'POST'])
+def process_submit():
+
+    # run egret
+    run_egret()
     
     # render webpage
     return render_template('egret.html', data=data, session=session)
@@ -136,6 +145,31 @@ def download_file():
 
 @app.route('/upload', methods=['GET', 'POST'])
 def upload_file():
+    if request.method == 'POST':
+        file = request.files['file']
+        # If no file selected
+        if request.files['file'].filename == '':
+            return render_template('upload.html',
+                    uploadError='No file selected')
+        # If file isn't allowed
+        if not allowed_file(file.filename):
+            return render_template('upload.html',
+                    uploadError='Wrong filetype. Please upload a \'.txt\' file')
+        # If correctly uploaded and allowed filetype
+        if file and allowed_file(file.filename):
+            content = file.readlines()
+            stringcontent = []
+            # Need to decode byte lists into strings
+            for item in content:
+                string = item.decode("utf-8") 
+                stringcontent.append(string.rstrip())
+            # Transfer content into session
+            for item in stringcontent:
+                if item not in session:
+                    session.append(item)
+            # Rerun EGRET
+            run_egret()
+            return render_template('egret.html', data=data, session=session)
     return render_template('upload.html')
 
    
